@@ -1,3 +1,17 @@
+variable "ec2username" {
+  type        = string
+  description = "aws_iam_user_ec2user"
+}
+
+variable "ec2userpolicyname" {
+  type        = string
+  description = "name of ec2 policy"
+}
+
+// variable "ec2policy" {
+//   description = "policy of ec2"
+// }
+
 variable "vpc_name" {
   type        = string
   description = "Name of VPC"
@@ -54,4 +68,61 @@ variable "map_public_ip_on_launch" {
 variable "default_destination_cidr_block" {
   type        = string
   description = "default_destination_cidr_block"
+}
+
+variable "ingress_ports" {
+  type        = list(number)
+  description = "list of ingress ports"
+}
+variable "url" {
+  type        = string
+  description = "url"
+}
+variable "db_instance_class" {
+  type        = string
+  description = "db_instance_class"
+}
+variable "db_identifier" {
+  type        = string
+  description = "db_identifier"
+}
+variable "db_username" {
+  type        = string
+  description = "db_username"
+}
+variable "db_password" {
+  type        = string
+  description = "db_password"
+}
+variable "db_name" {
+  type        = string
+  description = "db_name"
+}
+variable "db_engine_version" {
+  type        = string
+  description = "db_engine_version"
+}
+variable "db_owner" {
+  type        = string
+  description = "db_owner"
+}
+
+variable "ec2_instance_type" {
+  type        = string
+  description = "ec2_instance_type"
+}
+variable "ec2_volume_type" {
+  type        = string
+  description = "ec2_volume_type"
+}
+variable "ec2_volume_size" {
+  description = "ec2_volume_size"
+}
+variable "ec2_delete_on_termination" {
+  type        = bool
+  description = "ec2_delete_on_termination"
+}
+variable "ec2_key_name" {
+  type        = string
+  description = "ec2_key_name"
 }
