@@ -1,4 +1,7 @@
 locals {
+  ec2username       = var.ec2username
+  ec2userpolicyname = var.ec2userpolicyname
+  // ec2policy                        = var.ec2policy
   name                             = var.vpc_name
   enable_dns_hostnames             = var.enable_dns_hostnames
   enable_dns_support               = var.enable_dns_support
@@ -9,9 +12,20 @@ locals {
   subnet_cidr_block                = var.subnet_cidr_block
   subnet_availability_zone         = var.subnet_availability_zone
   default_destination_cidr_block   = var.default_destination_cidr_block
+  ingress_ports                    = var.ingress_ports
+  url                              = var.url
+  db_instance_class                = var.db_instance_class
+  db_identifier                    = var.db_identifier
+  db_username                      = var.db_username
+  db_password                      = var.db_password
+  db_name                          = var.db_name
+  db_engine_version                = var.db_engine_version
+
+  db_owner = var.db_owner
 }
 
 
+// Create VPC
 resource "aws_vpc" "vpc" {
   cidr_block                       = local.vpc_cidr_block
   enable_dns_hostnames             = local.enable_dns_hostnames
@@ -50,23 +64,6 @@ resource "aws_route_table" "public" {
 
   vpc_id = aws_vpc.vpc.id
 
-  //   route = [
-  //     {
-  //       cidr_block                 = "0.0.0.0/0"
-  //       gateway_id                 = aws_internet_gateway.igw.id
-  //       egress_only_gateway_id     = ""
-  //       instance_id                = ""
-  //       ipv6_cidr_block            = ""
-  //       nat_gateway_id             = ""
-  //       network_interface_id       = ""
-  //       transit_gateway_id         = ""
-  //       vpc_peering_connection_id  = ""
-  //       carrier_gateway_id         = ""
-  //       destination_prefix_list_id = ""
-  //       local_gateway_id           = ""
-  //       vpc_endpoint_id            = ""
-  //     }
-  //   ]
   tags = {
     Name = format("%s-Public_Route_Table", local.name)
   }
@@ -84,4 +81,219 @@ resource "aws_route" "public" {
   route_table_id         = aws_route_table.public.id
   destination_cidr_block = local.default_destination_cidr_block
   gateway_id             = aws_internet_gateway.igw.id
+}
+
+// create security group - application
+resource "aws_security_group" "application" {
+  name   = "application"
+  vpc_id = aws_vpc.vpc.id
+  dynamic "ingress" {
+    iterator = port
+    for_each = local.ingress_ports
+    content {
+      from_port        = port.value
+      to_port          = port.value
+      protocol         = "tcp"
+      cidr_blocks      = ["0.0.0.0/0"]
+      ipv6_cidr_blocks = ["::/0"]
+    }
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+// create security group - database
+resource "aws_security_group" "database" {
+  name   = "database"
+  vpc_id = aws_vpc.vpc.id
+  ingress {
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = ["${aws_security_group.application.id}"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+// create S3
+resource "random_string" "resource_code" {
+  length  = 10
+  special = false
+  upper   = false
+}
+// resource "aws_kms_key" "mykey" {
+//   description             = "This key is used to encrypt bucket objects"
+//   deletion_window_in_days = 10
+// }
+
+resource "aws_s3_bucket" "bucket" {
+  bucket = format("%s.%s", random_string.resource_code.result, local.url)
+  acl    = "private"
+  lifecycle_rule {
+    enabled = true
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+  }
+  server_side_encryption_configuration {
+    rule {
+      apply_server_side_encryption_by_default {
+        // kms_master_key_id = aws_kms_key.mykey.arn
+        sse_algorithm = "AES256"
+      }
+    }
+  }
+}
+
+// RDS Parameter Group
+resource "aws_db_parameter_group" "default" {
+  name   = "mysql"
+  family = "mysql8.0"
+  parameter {
+    name  = "character_set_server"
+    value = "utf8"
+  }
+
+  parameter {
+    name  = "character_set_client"
+    value = "utf8"
+  }
+}
+
+// create RDS Instance
+resource "aws_db_instance" "default" {
+  allocated_storage      = 10
+  engine                 = "mysql"
+  instance_class         = local.db_instance_class
+  multi_az               = false
+  identifier             = local.db_identifier
+  engine_version         = local.db_engine_version
+  username               = local.db_username
+  password               = local.db_password
+  publicly_accessible    = false
+  db_subnet_group_name   = aws_db_subnet_group.default.name
+  vpc_security_group_ids = ["${aws_security_group.database.id}"]
+  name                   = local.db_name
+  skip_final_snapshot    = true
+  parameter_group_name   = aws_db_parameter_group.default.name
+}
+
+resource "aws_db_subnet_group" "default" {
+  name       = "aws_db_subnet_group"
+  subnet_ids = ["${aws_subnet.subnet[1].id}","${aws_subnet.subnet[2].id}"]
+}
+
+
+// AMI image
+data "aws_ami" "ami" {
+  executable_users = ["self"]
+  most_recent      = true
+  owners           = ["${local.db_owner}"]
+}
+
+resource "aws_instance" "ec2" {
+
+  depends_on = [
+    aws_db_instance.default
+  ]
+  ami           = data.aws_ami.ami.id
+  instance_type = "t2.micro"
+
+
+  root_block_device {
+    volume_type = "gp2"
+    volume_size = 20
+    delete_on_termination = true
+    encrypted = true
+  }
+
+  ebs_block_device {
+    device_name           = "/dev/sda1"
+    delete_on_termination = true
+    volume_size           = 20
+    volume_type           = "gp2"
+    encrypted             = true
+  }
+  iam_instance_profile        = aws_iam_instance_profile.ec2-s3.name
+  associate_public_ip_address = true
+  subnet_id                   = aws_subnet.subnet[0].id
+  security_groups = [
+    "${aws_security_group.application.id}"
+  ]
+  key_name  = "csye6225"
+  user_data = <<EOF
+#!/bin/bash
+sudo mkdir /home/ubuntu/webapp
+sudo chmod 777 /home/ubuntu/webapp
+sudo touch /home/ubuntu/webapp/.env
+sudo echo "DATABASE_username = ${aws_db_instance.default.username}" >> /home/ubuntu/webapp/.env
+sudo echo "DATABASE_password = ${aws_db_instance.default.password}" >> /home/ubuntu/webapp/.env
+sudo echo "DATABASE_host = ${aws_db_instance.default.endpoint}" >> /home/ubuntu/webapp/.env
+sudo echo "DATABASE_name = ${aws_db_instance.default.name}" >> /home/ubuntu/webapp/.env
+sudo echo "Bucket_name = ${aws_s3_bucket.bucket.bucket}" >> /home/ubuntu/webapp/.env
+cd /home/ubuntu/webapp
+sudo npm init -y
+sudo npm install  --save body-parser express bcryptjs mysql uuid nodemon dotenv aws-sdk mime-types
+##### END OF USER DATA
+  EOF
+}
+
+// create AMI user and policy
+
+resource "aws_iam_role" "EC2-CSYE6225" {
+  name = "EC2-CSYE6225"
+  assume_role_policy = jsonencode({
+    "Version" = "2012-10-17"
+    "Statement" = [
+      {
+        "Action" = "sts:AssumeRole"
+        "Effect" = "Allow"
+        "Sid"    = ""
+        "Principal" = {
+          "Service" = "ec2.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_policy" "WebAppS3" {
+  name = "WebAppS3"
+  policy = jsonencode({
+    "Version" : "2012-10-17",
+    "Statement" : [
+      {
+        "Action" : [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:DeleteObject",
+          "s3:PutObjectAcl"
+        ],
+        "Effect" : "Allow",
+        "Resource" : [
+          "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}",
+          "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}/*"
+        ]
+      }
+    ]
+  })
+}
+
+
+resource "aws_iam_role_policy_attachment" "EC2S3" {
+  role       = aws_iam_role.EC2-CSYE6225.name
+  policy_arn = aws_iam_policy.WebAppS3.arn
+}
+resource "aws_iam_instance_profile" "ec2-s3" {
+  name = aws_iam_role.EC2-CSYE6225.name
+  role = aws_iam_role.EC2-CSYE6225.name
 }
