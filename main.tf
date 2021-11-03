@@ -13,7 +13,6 @@ locals {
   subnet_availability_zone         = var.subnet_availability_zone
   default_destination_cidr_block   = var.default_destination_cidr_block
   ingress_ports                    = var.ingress_ports
-  url                              = var.url
   db_instance_class                = var.db_instance_class
   db_identifier                    = var.db_identifier
   db_username                      = var.db_username
@@ -135,7 +134,7 @@ resource "random_string" "resource_code" {
 // }
 
 resource "aws_s3_bucket" "bucket" {
-  bucket = format("%s.%s", random_string.resource_code.result, local.url)
+  bucket = format("%s.%s.%s", random_string.resource_code.result, var.profile,var.url)
   acl    = "private"
   lifecycle_rule {
     enabled = true
@@ -189,7 +188,7 @@ resource "aws_db_instance" "default" {
 
 resource "aws_db_subnet_group" "default" {
   name       = "aws_db_subnet_group"
-  subnet_ids = ["${aws_subnet.subnet[1].id}","${aws_subnet.subnet[2].id}"]
+  subnet_ids = ["${aws_subnet.subnet[1].id}", "${aws_subnet.subnet[2].id}"]
 }
 
 
@@ -210,10 +209,10 @@ resource "aws_instance" "ec2" {
 
 
   root_block_device {
-    volume_type = "gp2"
-    volume_size = 20
+    volume_type           = "gp2"
+    volume_size           = 20
     delete_on_termination = true
-    encrypted = true
+    encrypted             = true
   }
 
   ebs_block_device {
@@ -223,7 +222,12 @@ resource "aws_instance" "ec2" {
     volume_type           = "gp2"
     encrypted             = true
   }
-  iam_instance_profile        = aws_iam_instance_profile.ec2-s3.name
+  // iam_instance_profile        = aws_iam_instance_profile.ec2-s3.name
+  iam_instance_profile = aws_iam_instance_profile.ec2_codedeploy.name
+  tags = {
+    Name = "WebApp"
+  }
+
   associate_public_ip_address = true
   subnet_id                   = aws_subnet.subnet[0].id
   security_groups = [
@@ -243,6 +247,7 @@ sudo echo "Bucket_name = ${aws_s3_bucket.bucket.bucket}" >> /home/ubuntu/webapp/
 cd /home/ubuntu/webapp
 sudo npm init -y
 sudo npm install  --save body-parser express bcryptjs mysql uuid nodemon dotenv aws-sdk mime-types
+sudo npm install pm2@latest -g
 ##### END OF USER DATA
   EOF
 }
@@ -296,4 +301,196 @@ resource "aws_iam_role_policy_attachment" "EC2S3" {
 resource "aws_iam_instance_profile" "ec2-s3" {
   name = aws_iam_role.EC2-CSYE6225.name
   role = aws_iam_role.EC2-CSYE6225.name
+}
+
+resource "aws_iam_policy" "CodeDeploy_EC2_S3" {
+  name = "CodeDeploy_EC2_S3"
+  policy = jsonencode({
+    "Version" : "2012-10-17",
+    "Statement" : [
+      {
+        "Action" : [
+          "s3:Get*",
+          "s3:List*"
+        ],
+        "Effect" : "Allow",
+        "Resource" : [
+          "arn:aws:s3:::${var.codedeploy_url}",
+          "arn:aws:s3:::${var.codedeploy_url}/*"
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "GH_Upload_To_S3" {
+  name = "GH_Upload_To_S3"
+  policy = jsonencode({
+    "Version" : "2012-10-17",
+    "Statement" : [
+      {
+        "Effect" : "Allow",
+        "Action" : [
+          "s3:PutObject",
+          "s3:Get*",
+          "s3:List*"
+        ],
+        "Resource" : [
+          "arn:aws:s3:::${var.codedeploy_url}",
+          "arn:aws:s3:::${var.codedeploy_url}/*"
+        ]
+      }
+    ]
+  })
+}
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_iam_policy" "GH_Code_Deploy" {
+  name = "GH_Code_Deploy"
+  policy = jsonencode({
+    "Version" : "2012-10-17",
+    "Statement" : [
+      {
+        "Effect" : "Allow",
+        "Action" : [
+          "codedeploy:RegisterApplicationRevision",
+          "codedeploy:GetApplicationRevision"
+        ],
+        "Resource" : [
+          "arn:aws:codedeploy:${var.codedeploy_region}:${data.aws_caller_identity.current.account_id}:application:${var.codedeploy_application_name}"
+        ]
+      },
+      {
+        "Effect" : "Allow",
+        "Action" : [
+          "codedeploy:CreateDeployment",
+          "codedeploy:GetDeployment"
+        ],
+        "Resource" : [
+          "*"
+        ]
+      },
+      {
+        "Effect" : "Allow",
+        "Action" : [
+          "codedeploy:GetDeploymentConfig"
+        ],
+        "Resource" : [
+          "arn:aws:codedeploy:${var.codedeploy_region}:${data.aws_caller_identity.current.account_id}:deploymentconfig:CodeDeployDefault.OneAtATime",
+          "arn:aws:codedeploy:${var.codedeploy_region}:${data.aws_caller_identity.current.account_id}:deploymentconfig:CodeDeployDefault.HalfAtATime",
+          "arn:aws:codedeploy:${var.codedeploy_region}:${data.aws_caller_identity.current.account_id}:deploymentconfig:CodeDeployDefault.AllAtOnce"
+        ]
+      }
+    ]
+  })
+}
+
+data "aws_iam_user" "ghactions_app" {
+  user_name = "ghactions-app"
+}
+
+resource "aws_iam_user_policy_attachment" "GH_Upload_To_S3_user" {
+  user       = data.aws_iam_user.ghactions_app.user_name
+  policy_arn = aws_iam_policy.GH_Upload_To_S3.arn
+}
+
+resource "aws_iam_user_policy_attachment" "GH_Code_Deploy_user" {
+  user       = data.aws_iam_user.ghactions_app.user_name
+  policy_arn = aws_iam_policy.GH_Code_Deploy.arn
+}
+
+resource "aws_iam_role" "CodeDeployEC2ServiceRole" {
+  name = "CodeDeployEC2ServiceRole"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Sid    = ""
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "CodeDeployEC2ServiceRole_EC2_S3_role" {
+  role       = aws_iam_role.CodeDeployEC2ServiceRole.name
+  policy_arn = aws_iam_policy.CodeDeploy_EC2_S3.arn
+}
+
+resource "aws_iam_role_policy_attachment" "CodeDeployEC2ServiceRole_WebAppS3_role" {
+  role       = aws_iam_role.CodeDeployEC2ServiceRole.name
+  policy_arn = aws_iam_policy.WebAppS3.arn
+}
+
+resource "aws_iam_instance_profile" "ec2_codedeploy" {
+  name = aws_iam_role.CodeDeployEC2ServiceRole.name
+  role = aws_iam_role.CodeDeployEC2ServiceRole.name
+}
+
+resource "aws_iam_role" "CodeDeployServiceRole" {
+  name = "CodeDeployServiceRole"
+  assume_role_policy = jsonencode({
+    "Version" : "2012-10-17",
+    "Statement" : [
+      {
+        "Sid" : "",
+        "Effect" : "Allow",
+        "Principal" : {
+          "Service" : [
+            "codedeploy.amazonaws.com"
+          ]
+        },
+        "Action" : "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "CodeDeployRole" {
+  role       = aws_iam_role.CodeDeployServiceRole.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole"
+}
+
+resource "aws_codedeploy_app" "csye6225_webapp" {
+  name             = "csye6225-webapp"
+  compute_platform = "Server"
+}
+
+resource "aws_codedeploy_deployment_group" "csye6225_webapp_deployment_group" {
+  app_name              = aws_codedeploy_app.csye6225_webapp.name
+  deployment_group_name = "csye6225-webapp-deployment"
+  service_role_arn      = aws_iam_role.CodeDeployServiceRole.arn
+  deployment_style {
+    deployment_type = "IN_PLACE"
+  }
+  ec2_tag_set {
+    ec2_tag_filter {
+      key   = "Name"
+      type  = "KEY_AND_VALUE"
+      value = "WebApp"
+    }
+  }
+  deployment_config_name = "CodeDeployDefault.AllAtOnce"
+
+  auto_rollback_configuration {
+    enabled = true
+    events  = ["DEPLOYMENT_FAILURE"]
+  }
+}
+data "aws_route53_zone" "zone" {
+  name = "${var.profile}.${var.url}"
+  private_zone = false
+}
+
+resource "aws_route53_record" "record" {
+  zone_id = data.aws_route53_zone.zone.id
+  name    = "${var.profile}.${var.url}"
+  type    = "A"
+  ttl     = "300"
+  records = [aws_instance.ec2.public_ip]
 }
