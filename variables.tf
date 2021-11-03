@@ -126,3 +126,22 @@ variable "ec2_key_name" {
   type        = string
   description = "ec2_key_name"
 }
+
+variable "codedeploy_url" {
+  type        = string
+  description = "codedeploy url"
+}
+
+variable "codedeploy_region" {
+  type        = string
+  description = "region of codedeploy"
+}
+
+variable "codedeploy_application_name" {
+  type        = string
+  description = "CODE_DEPLOY_APPLICATION_NAME"
+}
+variable "profile" {
+  type        = string
+  description = "profile"
+}
