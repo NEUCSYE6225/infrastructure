@@ -592,10 +592,10 @@ resource "aws_autoscaling_policy" "down" {
 resource "aws_cloudwatch_metric_alarm" "alarm_cpu_high" {
   alarm_name          = "alarm_cpu_up_5_percent"
   comparison_operator = "GreaterThanOrEqualToThreshold"
-  evaluation_periods  = "1"
+  evaluation_periods  = "2"
   metric_name         = "CPUUtilization"
   namespace           = "AWS/EC2"
-  period              = "60"
+  period              = "120"
   statistic           = "Average"
   threshold           = "5"
   dimensions          = { 
@@ -608,10 +608,10 @@ resource "aws_cloudwatch_metric_alarm" "alarm_cpu_high" {
 resource "aws_cloudwatch_metric_alarm" "alarm_cpu_down" {
   alarm_name          = "alarm_cpu_down_3_percent"
   comparison_operator = "LessThanThreshold"
-  evaluation_periods  = "1"
+  evaluation_periods  = "2"
   metric_name         = "CPUUtilization"
   namespace           = "AWS/EC2"
-  period              = "60"
+  period              = "120"
   statistic           = "Average"
   threshold           = "3"
   dimensions          = { 
