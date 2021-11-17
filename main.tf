@@ -86,16 +86,23 @@ resource "aws_route" "public" {
 resource "aws_security_group" "application" {
   name   = "application"
   vpc_id = aws_vpc.vpc.id
-  dynamic "ingress" {
-    iterator = port
-    for_each = local.ingress_ports
-    content {
-      from_port        = port.value
-      to_port          = port.value
-      protocol         = "tcp"
-      cidr_blocks      = ["0.0.0.0/0"]
-      ipv6_cidr_blocks = ["::/0"]
-    }
+  // dynamic "ingress" {
+  //   iterator = port
+  //   for_each = local.ingress_ports
+  //   content {
+  //     from_port        = port.value
+  //     to_port          = port.value
+  //     protocol         = "tcp"
+  //     cidr_blocks      = ["0.0.0.0/0"]
+  //     ipv6_cidr_blocks = ["::/0"]
+  //   }
+  // }
+  ingress {
+    from_port   = 3000
+    to_port     = 3000
+    protocol    = "tcp"
+    #cidr_blocks = ["0.0.0.0/0"]
+    security_groups = [aws_security_group.lb_security_group.id]
   }
   egress {
     from_port   = 0
@@ -134,7 +141,7 @@ resource "random_string" "resource_code" {
 // }
 
 resource "aws_s3_bucket" "bucket" {
-  bucket = format("%s.%s.%s", random_string.resource_code.result, var.profile,var.url)
+  bucket = format("%s.%s.%s", random_string.resource_code.result, var.profile, var.url)
   acl    = "private"
   lifecycle_rule {
     enabled = true
@@ -199,58 +206,58 @@ data "aws_ami" "ami" {
   owners           = ["${local.db_owner}"]
 }
 
-resource "aws_instance" "ec2" {
+// resource "aws_instance" "ec2" {
 
-  depends_on = [
-    aws_db_instance.default
-  ]
-  ami           = data.aws_ami.ami.id
-  instance_type = "t2.micro"
+//   depends_on = [
+//     aws_db_instance.default
+//   ]
+//   ami           = data.aws_ami.ami.id
+//   instance_type = "t2.micro"
 
 
-  root_block_device {
-    volume_type           = "gp2"
-    volume_size           = 20
-    delete_on_termination = true
-    encrypted             = true
-  }
+//   root_block_device {
+//     volume_type           = "gp2"
+//     volume_size           = 20
+//     delete_on_termination = true
+//     encrypted             = true
+//   }
 
-  ebs_block_device {
-    device_name           = "/dev/sda1"
-    delete_on_termination = true
-    volume_size           = 20
-    volume_type           = "gp2"
-    encrypted             = true
-  }
-  // iam_instance_profile        = aws_iam_instance_profile.ec2-s3.name
-  iam_instance_profile = aws_iam_instance_profile.ec2_codedeploy.name
-  tags = {
-    Name = "WebApp"
-  }
+//   ebs_block_device {
+//     device_name           = "/dev/sda1"
+//     delete_on_termination = true
+//     volume_size           = 20
+//     volume_type           = "gp2"
+//     encrypted             = true
+//   }
+//   // iam_instance_profile        = aws_iam_instance_profile.ec2-s3.name
+//   iam_instance_profile = aws_iam_instance_profile.ec2_codedeploy.name
+//   tags = {
+//     Name = "WebApp"
+//   }
 
-  associate_public_ip_address = true
-  subnet_id                   = aws_subnet.subnet[0].id
-  security_groups = [
-    "${aws_security_group.application.id}"
-  ]
-  key_name  = "csye6225"
-  user_data = <<EOF
-#!/bin/bash
-sudo mkdir /home/ubuntu/webapp
-sudo chmod 777 /home/ubuntu/webapp
-sudo touch /home/ubuntu/webapp/.env
-sudo echo "DATABASE_username = ${aws_db_instance.default.username}" >> /home/ubuntu/webapp/.env
-sudo echo "DATABASE_password = ${aws_db_instance.default.password}" >> /home/ubuntu/webapp/.env
-sudo echo "DATABASE_host = ${aws_db_instance.default.endpoint}" >> /home/ubuntu/webapp/.env
-sudo echo "DATABASE_name = ${aws_db_instance.default.name}" >> /home/ubuntu/webapp/.env
-sudo echo "Bucket_name = ${aws_s3_bucket.bucket.bucket}" >> /home/ubuntu/webapp/.env
-cd /home/ubuntu/webapp
-sudo npm init -y
-sudo npm install  --save body-parser express bcryptjs mysql uuid nodemon dotenv aws-sdk mime-types
-sudo npm install pm2@latest -g
-##### END OF USER DATA
-  EOF
-}
+//   associate_public_ip_address = true
+//   subnet_id                   = aws_subnet.subnet[0].id
+//   security_groups = [
+//     "${aws_security_group.application.id}"
+//   ]
+//   key_name  = "csye6225"
+//   user_data = <<EOF
+// #!/bin/bash
+// sudo mkdir /home/ubuntu/webapp
+// sudo chmod 777 /home/ubuntu/webapp
+// sudo touch /home/ubuntu/webapp/.env
+// sudo echo "DATABASE_username = ${aws_db_instance.default.username}" >> /home/ubuntu/webapp/.env
+// sudo echo "DATABASE_password = ${aws_db_instance.default.password}" >> /home/ubuntu/webapp/.env
+// sudo echo "DATABASE_host = ${aws_db_instance.default.endpoint}" >> /home/ubuntu/webapp/.env
+// sudo echo "DATABASE_name = ${aws_db_instance.default.name}" >> /home/ubuntu/webapp/.env
+// sudo echo "Bucket_name = ${aws_s3_bucket.bucket.bucket}" >> /home/ubuntu/webapp/.env
+// cd /home/ubuntu/webapp
+// sudo npm init -y
+// sudo npm install  --save body-parser express bcryptjs mysql uuid nodemon dotenv aws-sdk mime-types public-ip fs winston statsd-client
+// sudo npm install pm2@latest -g
+// ##### END OF USER DATA
+//   EOF
+// }
 
 // create AMI user and policy
 
@@ -427,6 +434,13 @@ resource "aws_iam_role_policy_attachment" "CodeDeployEC2ServiceRole_WebAppS3_rol
   policy_arn = aws_iam_policy.WebAppS3.arn
 }
 
+# For clouldwatch
+resource "aws_iam_role_policy_attachment" "CodeDeployEC2ServiceRole_cloudwatch_role" {
+  role       = aws_iam_role.CodeDeployEC2ServiceRole.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+
+
 resource "aws_iam_instance_profile" "ec2_codedeploy" {
   name = aws_iam_role.CodeDeployEC2ServiceRole.name
   role = aws_iam_role.CodeDeployEC2ServiceRole.name
@@ -465,6 +479,7 @@ resource "aws_codedeploy_deployment_group" "csye6225_webapp_deployment_group" {
   app_name              = aws_codedeploy_app.csye6225_webapp.name
   deployment_group_name = "csye6225-webapp-deployment"
   service_role_arn      = aws_iam_role.CodeDeployServiceRole.arn
+  autoscaling_groups    = [aws_autoscaling_group.autoscaling_group.name]
   deployment_style {
     deployment_type = "IN_PLACE"
   }
@@ -475,6 +490,11 @@ resource "aws_codedeploy_deployment_group" "csye6225_webapp_deployment_group" {
       value = "WebApp"
     }
   }
+  load_balancer_info {
+    target_group_info {
+        name = aws_lb_target_group.webapp.name
+    }
+  }
   deployment_config_name = "CodeDeployDefault.AllAtOnce"
 
   auto_rollback_configuration {
@@ -483,14 +503,191 @@ resource "aws_codedeploy_deployment_group" "csye6225_webapp_deployment_group" {
   }
 }
 data "aws_route53_zone" "zone" {
-  name = "${var.profile}.${var.url}"
+  name         = "${var.profile}.${var.url}"
   private_zone = false
 }
 
+// resource "aws_route53_record" "record" {
+//   zone_id = data.aws_route53_zone.zone.id
+//   name    = "${var.profile}.${var.url}"
+//   type    = "A"
+//   ttl     = "300"
+//   records = [aws_instance.ec2.public_ip]
+// }
+
+
+
+
+resource "aws_launch_configuration" "asg_launch_config" {
+  name          = "asg_launch_config"
+  image_id      = data.aws_ami.ami.id
+  instance_type = "t2.micro"
+  key_name      = "csye6225"
+
+  associate_public_ip_address = true
+
+  iam_instance_profile = aws_iam_instance_profile.ec2_codedeploy.name
+
+  security_groups = [
+    "${aws_security_group.application.id}"
+  ]
+
+  user_data = <<EOF
+#!/bin/bash
+sudo mkdir /home/ubuntu/webapp
+sudo chmod 777 /home/ubuntu/webapp
+sudo touch /home/ubuntu/webapp/.env
+sudo echo "DATABASE_username = ${aws_db_instance.default.username}" >> /home/ubuntu/webapp/.env
+sudo echo "DATABASE_password = ${aws_db_instance.default.password}" >> /home/ubuntu/webapp/.env
+sudo echo "DATABASE_host = ${aws_db_instance.default.endpoint}" >> /home/ubuntu/webapp/.env
+sudo echo "DATABASE_name = ${aws_db_instance.default.name}" >> /home/ubuntu/webapp/.env
+sudo echo "Bucket_name = ${aws_s3_bucket.bucket.bucket}" >> /home/ubuntu/webapp/.env
+cd /home/ubuntu/webapp
+sudo npm init -y
+sudo npm install  --save body-parser express bcryptjs mysql uuid nodemon dotenv aws-sdk mime-types public-ip fs winston statsd-client
+sudo npm install pm2@latest -g
+sudo touch /home/ubuntu/autoscaling_done.txt
+sudo echo "done" >> /home/ubuntu/autoscaling_done.txt
+##### END OF USER DATA
+  EOF
+}
+
+resource "aws_autoscaling_group" "autoscaling_group" {
+  depends_on = [aws_launch_configuration.asg_launch_config]
+
+  name                      = "webapp_autoscaling_group"
+  default_cooldown          = 60
+  launch_configuration      = aws_launch_configuration.asg_launch_config.name
+  max_size                  = 5
+  min_size                  = 3
+  desired_capacity          = 3
+  health_check_grace_period = 180
+  target_group_arns = ["${aws_lb_target_group.webapp.arn}"]
+  vpc_zone_identifier       = ["${aws_subnet.subnet[0].id}", "${aws_subnet.subnet[1].id}", "${aws_subnet.subnet[2].id}"]
+  tag {
+    key                 = "Name"
+    value               = "WebApp"
+    propagate_at_launch = true
+  }
+}
+
+resource "aws_autoscaling_policy" "up" {
+  name                   = "autoscaling_policy_up"
+  policy_type            = "SimpleScaling"
+  scaling_adjustment     = 1
+  adjustment_type        = "ChangeInCapacity"
+  cooldown               = 60
+  autoscaling_group_name = aws_autoscaling_group.autoscaling_group.name
+}
+
+resource "aws_autoscaling_policy" "down" {
+  name                   = "autoscaling_policy_down"
+  policy_type            = "SimpleScaling"
+  scaling_adjustment     = -1
+  adjustment_type        = "ChangeInCapacity"
+  cooldown               = 60
+  autoscaling_group_name = aws_autoscaling_group.autoscaling_group.name
+}
+
+resource "aws_cloudwatch_metric_alarm" "alarm_cpu_high" {
+  alarm_name          = "alarm_cpu_up_5_percent"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "5"
+  dimensions          = { 
+    AutoScalingGroupName = "${aws_autoscaling_group.autoscaling_group.name}" 
+  }
+  actions_enabled = true
+  alarm_actions       = ["${aws_autoscaling_policy.up.arn}"]
+}
+
+resource "aws_cloudwatch_metric_alarm" "alarm_cpu_down" {
+  alarm_name          = "alarm_cpu_down_3_percent"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "3"
+  dimensions          = { 
+    AutoScalingGroupName = "${aws_autoscaling_group.autoscaling_group.name}" 
+  }
+  actions_enabled = true
+  alarm_actions       = ["${aws_autoscaling_policy.down.arn}"]
+}
+
+resource "aws_security_group" "lb_security_group" {
+  name   = "loadbalancer_sc"
+  vpc_id = aws_vpc.vpc.id
+  dynamic "ingress" {
+    iterator = port
+    for_each = local.ingress_ports
+    content {
+      from_port        = port.value
+      to_port          = port.value
+      protocol         = "tcp"
+      cidr_blocks      = ["0.0.0.0/0"]
+      ipv6_cidr_blocks = ["::/0"]
+    }
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_lb" "loadbalancer" {
+  name                       = "webapp-load-balancer"
+  internal                   = false
+  subnets                    = ["${aws_subnet.subnet[0].id}", "${aws_subnet.subnet[1].id}", "${aws_subnet.subnet[2].id}"]
+  security_groups            = ["${aws_security_group.lb_security_group.id}"]
+  ip_address_type            = "ipv4"
+  enable_deletion_protection = false
+}
+
+resource "aws_lb_target_group" "webapp" {
+  name        = "webapptargetgroup"
+  port        = 3000
+  protocol    = "HTTP"
+  target_type = "instance"
+  vpc_id      = aws_vpc.vpc.id
+  health_check {
+    port                = "3000"
+    interval            = 10
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    path                = "/healthcheck"
+  }
+}
+
+resource "aws_lb_listener" "forward" {
+  load_balancer_arn = aws_lb.loadbalancer.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = "${aws_lb_target_group.webapp.arn}"
+  }
+}
+
+
 resource "aws_route53_record" "record" {
+    depends_on = [aws_lb.loadbalancer]
   zone_id = data.aws_route53_zone.zone.id
   name    = "${var.profile}.${var.url}"
   type    = "A"
-  ttl     = "300"
-  records = [aws_instance.ec2.public_ip]
+    alias {
+    name                   = "${aws_lb.loadbalancer.dns_name}"
+    zone_id                = "${aws_lb.loadbalancer.zone_id}"
+    evaluate_target_health = false
+  }
 }

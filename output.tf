@@ -29,3 +29,7 @@ output "S3_name" {
 output "ami_id" {
   value = data.aws_ami.ami.id
 }
+
+// output "ec_id" {
+//   value = aws_instance.ec2.public_ip
+// }
