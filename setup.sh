@@ -5,6 +5,7 @@ then
     terraform apply -var-file="terraform.tfvars"  
 elif [ "$1" == "destroy" ]
 then
+  export AWS_PROFILE=prod
   aws s3 rm s3://$2 --recursive
   terraform destroy -var-file="terraform.tfvars"
 elif [ "$1" == "amiimage" ]
