@@ -98,9 +98,9 @@ resource "aws_security_group" "application" {
   //   }
   // }
   ingress {
-    from_port   = 3000
-    to_port     = 3000
-    protocol    = "tcp"
+    from_port = 3000
+    to_port   = 3000
+    protocol  = "tcp"
     #cidr_blocks = ["0.0.0.0/0"]
     security_groups = [aws_security_group.lb_security_group.id]
   }
@@ -177,26 +177,42 @@ resource "aws_db_parameter_group" "default" {
 
 // create RDS Instance
 resource "aws_db_instance" "default" {
-  allocated_storage      = 10
-  engine                 = "mysql"
-  instance_class         = local.db_instance_class
-  multi_az               = false
-  identifier             = local.db_identifier
-  engine_version         = local.db_engine_version
-  username               = local.db_username
-  password               = local.db_password
-  publicly_accessible    = false
-  db_subnet_group_name   = aws_db_subnet_group.default.name
-  vpc_security_group_ids = ["${aws_security_group.database.id}"]
-  name                   = local.db_name
-  skip_final_snapshot    = true
-  parameter_group_name   = aws_db_parameter_group.default.name
+  allocated_storage       = 10
+  engine                  = "mysql"
+  instance_class          = local.db_instance_class
+  multi_az                = false
+  identifier              = local.db_identifier
+  engine_version          = local.db_engine_version
+  username                = local.db_username
+  password                = local.db_password
+  publicly_accessible     = false
+  db_subnet_group_name    = aws_db_subnet_group.default.name
+  vpc_security_group_ids  = ["${aws_security_group.database.id}"]
+  name                    = local.db_name
+  skip_final_snapshot     = true
+  parameter_group_name    = aws_db_parameter_group.default.name
+  availability_zone       = "us-east-1b"
+  backup_retention_period = 1
 }
 
 resource "aws_db_subnet_group" "default" {
   name       = "aws_db_subnet_group"
   subnet_ids = ["${aws_subnet.subnet[1].id}", "${aws_subnet.subnet[2].id}"]
 }
+
+resource "aws_db_instance" "readreplica" {
+  replicate_source_db = aws_db_instance.default.identifier
+  instance_class      = local.db_instance_class
+  multi_az            = false
+  publicly_accessible = false
+  skip_final_snapshot = true
+  // db_subnet_group_name   = aws_db_subnet_group.default.name
+  identifier             = "${local.db_name}-readreplica"
+  vpc_security_group_ids = ["${aws_security_group.database.id}"]
+  parameter_group_name   = aws_db_parameter_group.default.name
+  availability_zone      = "us-east-1c"
+}
+
 
 
 // AMI image
@@ -407,6 +423,11 @@ resource "aws_iam_user_policy_attachment" "GH_Code_Deploy_user" {
   policy_arn = aws_iam_policy.GH_Code_Deploy.arn
 }
 
+resource "aws_iam_user_policy_attachment" "GH_Code_Deploy_Lambda_user" {
+  user       = data.aws_iam_user.ghactions_app.user_name
+  policy_arn = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
+}
+
 resource "aws_iam_role" "CodeDeployEC2ServiceRole" {
   name = "CodeDeployEC2ServiceRole"
   assume_role_policy = jsonencode({
@@ -492,7 +513,7 @@ resource "aws_codedeploy_deployment_group" "csye6225_webapp_deployment_group" {
   }
   load_balancer_info {
     target_group_info {
-        name = aws_lb_target_group.webapp.name
+      name = aws_lb_target_group.webapp.name
     }
   }
   deployment_config_name = "CodeDeployDefault.AllAtOnce"
@@ -540,11 +561,13 @@ sudo touch /home/ubuntu/webapp/.env
 sudo echo "DATABASE_username = ${aws_db_instance.default.username}" >> /home/ubuntu/webapp/.env
 sudo echo "DATABASE_password = ${aws_db_instance.default.password}" >> /home/ubuntu/webapp/.env
 sudo echo "DATABASE_host = ${aws_db_instance.default.endpoint}" >> /home/ubuntu/webapp/.env
+sudo echo "DATABASE_read_host = ${aws_db_instance.readreplica.endpoint}" >> /home/ubuntu/webapp/.env
 sudo echo "DATABASE_name = ${aws_db_instance.default.name}" >> /home/ubuntu/webapp/.env
 sudo echo "Bucket_name = ${aws_s3_bucket.bucket.bucket}" >> /home/ubuntu/webapp/.env
+sudo echo "SNS_topic = ${aws_sns_topic.sns_topic.arn}" >> /home/ubuntu/webapp/.env
 cd /home/ubuntu/webapp
 sudo npm init -y
-sudo npm install  --save body-parser express bcryptjs mysql uuid nodemon dotenv aws-sdk mime-types public-ip fs winston statsd-client
+sudo npm install  --save body-parser express bcryptjs mysql uuid nodemon dotenv aws-sdk mime-types public-ip fs winston statsd-client sequelize mysql2
 sudo npm install pm2@latest -g
 sudo touch /home/ubuntu/autoscaling_done.txt
 sudo echo "done" >> /home/ubuntu/autoscaling_done.txt
@@ -562,7 +585,7 @@ resource "aws_autoscaling_group" "autoscaling_group" {
   min_size                  = 3
   desired_capacity          = 3
   health_check_grace_period = 180
-  target_group_arns = ["${aws_lb_target_group.webapp.arn}"]
+  target_group_arns         = ["${aws_lb_target_group.webapp.arn}"]
   vpc_zone_identifier       = ["${aws_subnet.subnet[0].id}", "${aws_subnet.subnet[1].id}", "${aws_subnet.subnet[2].id}"]
   tag {
     key                 = "Name"
@@ -598,11 +621,11 @@ resource "aws_cloudwatch_metric_alarm" "alarm_cpu_high" {
   period              = "120"
   statistic           = "Average"
   threshold           = "5"
-  dimensions          = { 
-    AutoScalingGroupName = "${aws_autoscaling_group.autoscaling_group.name}" 
+  dimensions = {
+    AutoScalingGroupName = "${aws_autoscaling_group.autoscaling_group.name}"
   }
   actions_enabled = true
-  alarm_actions       = ["${aws_autoscaling_policy.up.arn}"]
+  alarm_actions   = ["${aws_autoscaling_policy.up.arn}"]
 }
 
 resource "aws_cloudwatch_metric_alarm" "alarm_cpu_down" {
@@ -614,11 +637,11 @@ resource "aws_cloudwatch_metric_alarm" "alarm_cpu_down" {
   period              = "120"
   statistic           = "Average"
   threshold           = "3"
-  dimensions          = { 
-    AutoScalingGroupName = "${aws_autoscaling_group.autoscaling_group.name}" 
+  dimensions = {
+    AutoScalingGroupName = "${aws_autoscaling_group.autoscaling_group.name}"
   }
   actions_enabled = true
-  alarm_actions       = ["${aws_autoscaling_policy.down.arn}"]
+  alarm_actions   = ["${aws_autoscaling_policy.down.arn}"]
 }
 
 resource "aws_security_group" "lb_security_group" {
@@ -675,19 +698,105 @@ resource "aws_lb_listener" "forward" {
 
   default_action {
     type             = "forward"
-    target_group_arn = "${aws_lb_target_group.webapp.arn}"
+    target_group_arn = aws_lb_target_group.webapp.arn
   }
 }
 
 
 resource "aws_route53_record" "record" {
-    depends_on = [aws_lb.loadbalancer]
-  zone_id = data.aws_route53_zone.zone.id
-  name    = "${var.profile}.${var.url}"
-  type    = "A"
-    alias {
-    name                   = "${aws_lb.loadbalancer.dns_name}"
-    zone_id                = "${aws_lb.loadbalancer.zone_id}"
+  depends_on = [aws_lb.loadbalancer]
+  zone_id    = data.aws_route53_zone.zone.id
+  name       = "${var.profile}.${var.url}"
+  type       = "A"
+  alias {
+    name                   = aws_lb.loadbalancer.dns_name
+    zone_id                = aws_lb.loadbalancer.zone_id
     evaluate_target_health = false
+  }
+}
+
+resource "aws_sns_topic" "sns_topic" {
+  name = "user_verification_topic"
+}
+
+resource "aws_iam_role_policy_attachment" "CodeDeployEC2ServiceRole_SNS_role" {
+  role       = aws_iam_role.CodeDeployEC2ServiceRole.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSNSFullAccess"
+}
+
+resource "aws_iam_role" "lambda" {
+  name = "lambda_role"
+  assume_role_policy = jsonencode({
+    "Version" : "2012-10-17",
+    "Statement" : [
+      {
+        "Effect" : "Allow",
+        "Principal" : {
+          "Service" : "lambda.amazonaws.com"
+        },
+        "Action" : "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_iam_basicexecution" {
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  role       = aws_iam_role.lambda.name
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_iam_ses" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSESFullAccess"
+  role       = aws_iam_role.lambda.name
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_iam_dynamodb" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+  role       = aws_iam_role.lambda.name
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_iam_dynamodb" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+  // role       = aws_iam_role.EC2-CSYE6225.name
+  role       = aws_iam_role.CodeDeployEC2ServiceRole.name
+}
+
+resource "aws_lambda_function" "lambda_function" {
+  filename      = "index.js.zip"
+  function_name = "webapp-lambda"
+  role          = aws_iam_role.lambda.arn
+  handler       = "index.handler"
+  runtime       = "nodejs14.x"
+}
+
+resource "aws_lambda_permission" "lambda_trigger" {
+  statement_id  = "AllowExecutionFromSNS"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.lambda_function.function_name
+  principal     = "sns.amazonaws.com"
+  source_arn    = aws_sns_topic.sns_topic.arn
+}
+
+resource "aws_sns_topic_subscription" "SNSSubscribe" {
+  topic_arn = aws_sns_topic.sns_topic.arn
+  protocol  = "lambda"
+  endpoint  = aws_lambda_function.lambda_function.arn
+}
+
+resource "aws_dynamodb_table" "dynamodb" {
+  name           = "webapp_csye6225"
+  hash_key       = "username"
+  read_capacity  = 5
+  write_capacity = 5
+  attribute {
+    name = "username"
+    type = "S"
+  }
+  ttl {
+    attribute_name = "TimeToLive"
+    enabled        = true
+  }
+  tags = {
+    Name = "DynamoDB"
   }
 }
