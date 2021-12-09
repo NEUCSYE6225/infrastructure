@@ -48,5 +48,10 @@ Date: 2021/10/11
             You may write those variables into terraform.tfvars
         </div>
     </li>
+    <li>
+    <div>
+        In order to import crt, pem to aws, please run importAWSCert.sh by ./importAWSCert.sh
+    </div>
+    </li>
 
 </ol>

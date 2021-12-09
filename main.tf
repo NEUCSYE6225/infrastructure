@@ -173,6 +173,11 @@ resource "aws_db_parameter_group" "default" {
     name  = "character_set_client"
     value = "utf8"
   }
+  parameter {
+    name  = "performance_schema"
+    value = "1"
+    apply_method = "pending-reboot"
+  }
 }
 
 // create RDS Instance
@@ -193,6 +198,17 @@ resource "aws_db_instance" "default" {
   parameter_group_name    = aws_db_parameter_group.default.name
   availability_zone       = "us-east-1b"
   backup_retention_period = 1
+  kms_key_id              = aws_kms_key.rdskey.arn
+  storage_encrypted       = true
+  // performance_insights_enabled = true
+}
+
+resource "aws_kms_key" "rdskey" {
+  description             = "This key is used to encrypt rds"
+  deletion_window_in_days = 7
+  tags = {
+    Name = "rds_key"
+  }
 }
 
 resource "aws_db_subnet_group" "default" {
@@ -211,6 +227,8 @@ resource "aws_db_instance" "readreplica" {
   vpc_security_group_ids = ["${aws_security_group.database.id}"]
   parameter_group_name   = aws_db_parameter_group.default.name
   availability_zone      = "us-east-1c"
+  kms_key_id             = aws_kms_key.rdskey.arn
+  storage_encrypted      = true
 }
 
 
@@ -552,6 +570,19 @@ resource "aws_launch_configuration" "asg_launch_config" {
   security_groups = [
     "${aws_security_group.application.id}"
   ]
+  root_block_device {
+    volume_type           = "gp2"
+    delete_on_termination = true
+    encrypted             = true
+  }
+
+  // ebs_block_device {
+  //   device_name           = "/dev/sda2"
+  //   delete_on_termination = true
+  //   volume_size           = 20
+  //   volume_type           = "gp2"
+  //   encrypted             = true
+  // }
 
   user_data = <<EOF
 #!/bin/bash
@@ -569,6 +600,7 @@ cd /home/ubuntu/webapp
 sudo npm init -y
 sudo npm install  --save body-parser express bcryptjs mysql uuid nodemon dotenv aws-sdk mime-types public-ip fs winston statsd-client sequelize mysql2
 sudo npm install pm2@latest -g
+wget https://truststore.pki.rds.amazonaws.com/us-east-1/us-east-1-bundle.pem
 sudo touch /home/ubuntu/autoscaling_done.txt
 sudo echo "done" >> /home/ubuntu/autoscaling_done.txt
 ##### END OF USER DATA
@@ -691,17 +723,30 @@ resource "aws_lb_target_group" "webapp" {
   }
 }
 
+// resource "aws_lb_listener" "forward" {
+//   load_balancer_arn = aws_lb.loadbalancer.arn
+//   port              = "80"
+//   protocol          = "HTTP"
+
+//   default_action {
+//     type             = "forward"
+//     target_group_arn = aws_lb_target_group.webapp.arn
+//   }
+// }
+
 resource "aws_lb_listener" "forward" {
   load_balancer_arn = aws_lb.loadbalancer.arn
-  port              = "80"
-  protocol          = "HTTP"
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = "arn:aws:acm:us-east-1:347832660829:certificate/bb481d0d-98d1-46ee-bac6-d7fb90379a86"
+
 
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.webapp.arn
   }
 }
-
 
 resource "aws_route53_record" "record" {
   depends_on = [aws_lb.loadbalancer]
@@ -758,7 +803,7 @@ resource "aws_iam_role_policy_attachment" "lambda_iam_dynamodb" {
 resource "aws_iam_role_policy_attachment" "ec2_iam_dynamodb" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
   // role       = aws_iam_role.EC2-CSYE6225.name
-  role       = aws_iam_role.CodeDeployEC2ServiceRole.name
+  role = aws_iam_role.CodeDeployEC2ServiceRole.name
 }
 
 resource "aws_lambda_function" "lambda_function" {
@@ -799,4 +844,64 @@ resource "aws_dynamodb_table" "dynamodb" {
   tags = {
     Name = "DynamoDB"
   }
+}
+
+resource "aws_kms_key" "ebskey" {
+  description             = "KMS key for EBS "
+  deletion_window_in_days = 7
+  policy                  = <<EOF
+  {
+  "Version": "2012-10-17",
+  "Statement": [
+{
+    "Sid": "Allow direct access to key metadata to the account",
+    "Effect": "Allow",
+    "Principal": {
+        "AWS": "arn:aws:iam::347832660829:root"
+    },
+    "Action": "kms:*",
+    "Resource": "*"
+},
+{
+  "Sid": "Allow access through EBS for all principals in the account that are authorized to use EBS",
+  "Effect": "Allow",
+  "Principal": {
+      "AWS": [
+        "arn:aws:iam::347832660829:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+      ]
+  },
+  "Action": [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+  ],
+  "Resource": "*"
+},
+{
+  "Sid": "Allow attachment of persistent resources",
+  "Effect": "Allow",
+  "Principal": {
+      "AWS": [
+        "arn:aws:iam::347832660829:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+      ]
+  },
+  "Action": [
+      "kms:CreateGrant"
+  ],
+  "Resource": "*",
+  "Condition": {
+      "Bool": {
+          "kms:GrantIsForAWSResource": true
+      }
+    }
+  }
+]
+}
+EOF
+}
+
+resource "aws_ebs_default_kms_key" "ebsdefaultkey" {
+  key_arn = aws_kms_key.ebskey.arn
 }
